@@ -39,8 +39,37 @@ func (c *Cache) Get(key string) (value Value, ok bool) {
 	ele, ok := c.cache[key] // find the element, but what about ok?
 	if ok {
 		c.ll.MoveToFront(ele)
-		kv := ele.Value.(*entry) // what is happening here
+		kv := ele.Value.(*entry) // Value means the value in the list element
 		return kv.value, true
 	}
 	return
+}
+
+func (c *Cache) RemoveOldest() {
+	ele := c.ll.Back() // find the lowest frequent one
+	if ele != nil {    // if not null
+		c.ll.Remove(ele) // remove it
+		kv := ele.Value.(*entry)
+		delete(c.cache, kv.key)                                      // delete from the hashmap
+		c.currentBytes -= int64(len(kv.key)) + int64(kv.value.Len()) // minus the len
+		if c.OnEvicted != nil {
+			c.OnEvicted(kv.key, kv.value) // call back
+		}
+	}
+}
+
+func (c *Cache) Add(key string, value Value) {
+	if ele, ok := c.cache[key]; ok { // exist key, since visit -> movetofront
+		c.ll.MoveToFront(ele)
+		kv := ele.Value.(*entry)
+		c.currentBytes += int64(value.Len()) - int64(kv.value.Len()) // (new one) - (old one)
+		kv.value = value
+	} else { // do not exist
+		ele := c.ll.PushFront(&entry{key, value})
+		c.cache[key] = ele
+		c.currentBytes += int64(len(key)) + int64(value.Len())
+	}
+	for c.maxBytes != 0 && c.maxBytes < c.currentBytes {
+		c.RemoveOldest() // if add the new node cause the bytes exceed the maximum value, we should remove the oldest until have enough space
+	}
 }
