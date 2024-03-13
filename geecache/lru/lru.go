@@ -73,3 +73,7 @@ func (c *Cache) Add(key string, value Value) {
 		c.RemoveOldest() // if add the new node cause the bytes exceed the maximum value, we should remove the oldest until have enough space
 	}
 }
+
+func (c *Cache) Len() int {
+	return c.ll.Len()
+}
