@@ -2,19 +2,30 @@ package geecache
 
 import (
 	"fmt"
+	"geecache/consistenthash"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 )
 
 // default path e.g. http://www.xxx.com/_geecache/
-const defaultBasePath = "/_geecache/"
+const (
+	defaultBasePath = "/_geecache/"
+	defaultReplicas = 50
+)
 
 type HTTPPool struct {
-	self     string
-	basePath string
+	self       string
+	basePath   string
+	mu         sync.Mutex
+	peers      *consistenthash.Map // use consistenthash to get the result of key
+	httpGetter map[string]*httpGetter
 }
 
+// ---------------------------------------- http server
 func NewHTTPPool(self string) *HTTPPool {
 	return &HTTPPool{
 		self:     self,
@@ -59,3 +70,58 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(view.ByteSlice())
 }
+
+// ------------------------------ http client
+type httpGetter struct {
+	baseURL string // remote node ip
+}
+
+func (h *httpGetter) Get(group string, key string) ([]byte, error) {
+	u := fmt.Sprintf(
+		"%v%v/%v",
+		h.baseURL,
+		url.QueryEscape(group), // e.g. group: a/b/c -> after processing: a%b%c
+		url.QueryEscape(key),
+	)
+
+	res, err := http.Get(u) // client send get request, return server reponse
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close() // close connection
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned: %v", res.Status)
+	}
+
+	bytes, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %v", err)
+	}
+	return bytes, nil
+}
+
+var _ PeerGetter = (*httpGetter)(nil) //
+
+func (p *HTTPPool) Set(peers ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.peers = consistenthash.New(defaultReplicas, nil) // construct the consistenthash
+	p.peers.Add(peers...)                              // add
+	p.httpGetter = make(map[string]*httpGetter, len(peers))
+	for _, peer := range peers {
+		p.httpGetter[peer] = &httpGetter{baseURL: peer + p.basePath} // construct a http client for each node
+	}
+}
+
+func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if peer := p.peers.Get(key); peer != "" && peer != p.self {
+		p.Log("Pick peer %s", peer)
+		return p.httpGetter[peer], true
+	}
+	return nil, false
+}
+
+var _ PeerPicker = (*HTTPPool)(nil)

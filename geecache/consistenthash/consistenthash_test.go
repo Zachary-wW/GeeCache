@@ -8,7 +8,7 @@ import (
 func TestHash(t *testing.T) {
 	hash := New(3, func(key []byte) uint32 {
 		i, _ := strconv.Atoi(string(key))
-		return uint32(i)
+		return uint32(i) // simple hash func, just input the string type and then use the equal int type
 	})
 
 	hash.Add("6", "4", "2") // 02 04 06 12 14 16 22 24 26
